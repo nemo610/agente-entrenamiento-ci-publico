@@ -124,7 +124,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add paper_forward/state.json paper_forward/latest_report.json paper_forward/multibot_summary.json
+          git add -f paper_forward/state.json paper_forward/latest_report.json paper_forward/multibot_summary.json
           if ! git diff --cached --quiet; then
             git commit -m "Update automated paper research ledger"
             git pull --rebase origin main
