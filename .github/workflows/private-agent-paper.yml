@@ -96,7 +96,7 @@ jobs:
                       "sharpe_annualized_rf0": row.get("sharpe_annualized_rf0"),
                       "holdout_total_return_pct": holdout.get("holdout_total_return_pct"),
                       "holdout_max_drawdown_pct": holdout.get("holdout_max_drawdown_pct"),
-                      "holdout_positive_windows": holdout.get("rolling_holdout", {}).get("positive_windows"),
+                      "holdout_positive_windows": holdout.get("rolling_consistency", {}).get("positive_windows"),
                       "three_x_cost_total_return_pct": stress.get("3x_cost", {}).get("total_return_pct"),
                   })
           summary = {
