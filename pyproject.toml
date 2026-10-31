@@ -16,3 +16,7 @@ test = ["pytest>=8,<9"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["safe_risk_checks"]
