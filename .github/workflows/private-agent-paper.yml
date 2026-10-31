@@ -1,0 +1,145 @@
+name: Private Agent Paper Training (Free Public Runner)
+
+# This workflow deliberately has no pull_request trigger. It checks out private
+# source only on scheduled/manual runs and never uploads private reports as public artifacts.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 0 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-agent-paper-training
+  cancel-in-progress: false
+
+jobs:
+  train-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Require private-repository access token
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.GH_PRIVATE_REPO_TOKEN }}
+        run: |
+          if [ -z "$PRIVATE_REPO_TOKEN" ]; then
+            echo "::error::Configure GH_PRIVATE_REPO_TOKEN in this public repository's Actions secrets. See README."
+            exit 1
+          fi
+
+      - name: Check out private agent source
+        uses: actions/checkout@v4
+        with:
+          repository: nemo610/agente-entrenamiento-python
+          ref: main
+          token: ${{ secrets.GH_PRIVATE_REPO_TOKEN }}
+          path: private-agent
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: private-agent/requirements.txt
+
+      - name: Install test and research dependencies
+        working-directory: private-agent
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest build
+
+      - name: Run repository unit tests
+        working-directory: private-agent
+        run: |
+          python -m unittest discover -p "test_*.py"
+          python -m unittest discover -s export_risk_engine_sdk/tests -p "test_*.py"
+          python -m pytest -q tests/test_live_paper_multibot.py tests/test_paper_forward_tracker.py
+
+      - name: Run historical multi-strategy paper research
+        working-directory: private-agent
+        run: |
+          python quant_research/live_paper_multibot.py --interval 1d --output paper_multibot_report.json > /tmp/private-paper-simulation.log 2>&1 || {
+            echo "::error::Historical paper simulation failed. Private diagnostic output was not printed to this public log."
+            exit 1
+          }
+
+      - name: Update persistent prospective paper ledger
+        working-directory: private-agent
+        run: |
+          python quant_research/paper_forward_tracker.py --state paper_forward/state.json --output paper_forward/latest_report.json > /tmp/private-forward-tracker.log 2>&1 || {
+            echo "::error::Prospective paper tracker failed. Private diagnostic output was not printed to this public log."
+            exit 1
+          }
+
+      - name: Create a small private summary for future review
+        working-directory: private-agent
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("paper_multibot_report.json").read_text(encoding="utf-8"))
+          meta = report.get("_metadata", {})
+          candidates = []
+          for name, row in report.items():
+              if not name.startswith("portfolio__"):
+                  continue
+              holdout = row.get("holdout", {})
+              if holdout.get("eligible_for_paper_watchlist") is True:
+                  stress = row.get("cost_stress", {})
+                  candidates.append({
+                      "name": name,
+                      "total_return_pct": row.get("total_return_pct"),
+                      "max_drawdown_pct": row.get("max_drawdown_pct"),
+                      "sharpe_annualized_rf0": row.get("sharpe_annualized_rf0"),
+                      "holdout_total_return_pct": holdout.get("holdout_total_return_pct"),
+                      "holdout_max_drawdown_pct": holdout.get("holdout_max_drawdown_pct"),
+                      "holdout_positive_windows": holdout.get("rolling_holdout", {}).get("positive_windows"),
+                      "three_x_cost_total_return_pct": stress.get("3x_cost", {}).get("total_return_pct"),
+                  })
+          summary = {
+              "mode": "paper only; no exchange orders submitted",
+              "last_closed_candle_utc": meta.get("last_closed_candle_utc"),
+              "source": meta.get("source"),
+              "interval": meta.get("interval"),
+              "symbols": meta.get("symbols"),
+              "bot_count": meta.get("bot_count"),
+              "portfolio_count": meta.get("portfolio_count"),
+              "eligible_portfolio_count": meta.get("portfolios_eligible_for_paper_watchlist"),
+              "eligible_candidates_alphabetical_not_ranked": sorted(candidates, key=lambda x: x["name"]),
+              "warning": "Historical screening is exploratory, vulnerable to multiple-testing bias, and is not approval for real-money trading."
+          }
+          Path("paper_forward").mkdir(parents=True, exist_ok=True)
+          Path("paper_forward/multibot_summary.json").write_text(
+              json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+          )
+          PY
+
+      - name: Persist only private ledger and summary back to the private repository
+        working-directory: private-agent
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.GH_PRIVATE_REPO_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add paper_forward/state.json paper_forward/latest_report.json paper_forward/multibot_summary.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update automated paper research ledger"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          else
+            echo "No prospective-ledger changes to persist."
+          fi
+
+      - name: Publish non-sensitive run status only
+        if: always()
+        run: |
+          {
+            echo "## Private agent paper run"
+            echo "- This public runner does not publish private source or strategy reports as artifacts."
+            echo "- Check the job conclusion above for pass/fail."
+            echo "- A successful run commits the prospective ledger and summary to the private repository."
+            echo "- This workflow does not place orders on Binance or use real money."
+          } >> "$GITHUB_STEP_SUMMARY"
